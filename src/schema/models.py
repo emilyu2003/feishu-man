@@ -42,7 +42,7 @@ class InterviewSlot(BaseModel):
     date: str = Field(..., alias="日期")
     slot: str = Field(..., alias="时段") # 上午/下午/晚上
     specific_time: str = Field(..., alias="具体时间")
-    status: str = Field("可用", alias="可用状态") # 可用/已占用
+    status: str = Field("可用", alias="可用状态") # 可用/已发送/已占用
 
 class InterviewRecord(BaseModel):
     record_id: Optional[str] = None
@@ -52,5 +52,8 @@ class InterviewRecord(BaseModel):
     start_time: str = Field(..., alias="面试时间")
     status: InterviewStatus = Field(InterviewStatus.PENDING, alias="面试状态")
     feedback: Optional[str] = Field("", alias="面试反馈")
-    score: Optional[float] = Field(0.0, alias="评估结果")
+    evaluation_result: Optional[str] = Field("", alias="评估结果")
+    total_score: Optional[int] = Field(0, alias="总分")
+    final_result: Optional[str] = Field("", alias="最终结果")
+    interviewer_comment: Optional[str] = Field("", alias="面试官评语")
     arrangement_status: str = Field("待确认", alias="安排状态")

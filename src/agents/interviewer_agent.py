@@ -1,7 +1,9 @@
 from ..utils.llm import LLMService
 from ..schema.models import InterviewStatus
+from ..agents.candidate_agent import CandidateAgent
 import random
 from datetime import datetime, timedelta
+import json
 
 class InterviewerAgent:
     def __init__(self, llm_service: LLMService, interviewer_id: str = "INTERVIEWER_01"):
@@ -39,51 +41,188 @@ class InterviewerAgent:
                     
         return slots
 
-    async def generate_questions(self, jd: str, num_questions: int = 10) -> list:
-        """基于 JD 生成选择题"""
-        prompt = """
-        你是一个专业面试官，请根据以下岗位描述 (JD) 生成 {num} 道专业选择题。
-        JD 内容: {jd}
+    async def conduct_interview(self, jd: str, resume: dict, candidate: CandidateAgent) -> dict:
+        """进行交互式面试 (Flow 6)"""
+        interview_rounds = []
         
-        每道题必须包含:
-        - id: 题目编号
-        - question: 题干
-        - options: {{'A': '...', 'B': '...', 'C': '...', 'D': '...'}}
-        - answer: 正确选项 (A/B/C/D)
+        # 阶段一：自我介绍与背景了解（1-2轮）
+        intro_rounds = await self._phase1_introduction(resume, candidate)
+        interview_rounds.extend(intro_rounds)
+        
+        # 阶段二：技术能力考察（3-5轮）
+        tech_rounds = await self._phase2_technical(jd, resume, candidate)
+        interview_rounds.extend(tech_rounds)
+        
+        # 阶段三：项目经验与团队协作（2-3轮）
+        project_rounds = await self._phase3_project(resume, candidate)
+        interview_rounds.extend(project_rounds)
+        
+        # 计算各维度得分
+        scores = self._calculate_scores(interview_rounds)
+        total_score = sum(scores.values())
+        
+        # 判定是否通过
+        passed = total_score >= 60
+        
+        # 生成面试官评语
+        feedback = await self._generate_feedback(scores, total_score, passed)
+        
+        return {
+            "interview_rounds": interview_rounds,
+            "scores": scores,
+            "total_score": total_score,
+            "passed": passed,
+            "feedback": feedback
+        }
+
+    async def _phase1_introduction(self, resume: dict, candidate: CandidateAgent) -> list:
+        """阶段一：自我介绍与背景了解（1-2轮）"""
+        rounds = []
+        num_rounds = random.randint(1, 2)
+        
+        for i in range(num_rounds):
+            if i == 0:
+                question = f"请{resume['姓名']}做一下自我介绍"
+            else:
+                question = "请介绍一下你的工作经历和主要技能"
+            
+            # 调用候选人Agent回答问题
+            answer = await candidate.answer_question(resume, question)
+            
+            rounds.append({
+                "phase": "自我介绍与背景了解",
+                "question": question,
+                "answer": answer,
+                "evaluation_dimension": ["沟通能力", "表达能力"]
+            })
+        
+        return rounds
+
+    async def _phase2_technical(self, jd: str, resume: dict, candidate: CandidateAgent) -> list:
+        """阶段二：技术能力考察（3-5轮）"""
+        rounds = []
+        num_rounds = random.randint(3, 5)
+        
+        prompt = f"""
+        你是一个专业面试官，请根据以下岗位描述 (JD) 生成 {num_rounds} 个技术问题。
+        JD 内容: {jd}
+        候选人简历: {resume['简历内容']}
+        技能标签: {resume['技能标签']}
+        
+        每个问题必须包含:
+        - question: 问题内容
+        - question_type: 问题类型（概念理解/实际应用/问题解决）
+        - difficulty: 问题难度（基础/中等/困难）
         
         输出格式必须为 JSON 列表。
         """
-        questions = await self.llm.get_json_response(prompt, {"jd": jd, "num": num_questions})
-        return questions
-
-    def evaluate_performance(self, questions: list, candidate_answers: list) -> dict:
-        """评分逻辑：正确率 > 25% 通过"""
-        correct_count = 0
-        total = len(questions)
         
-        # 建立题目答案映射
-        answer_key = {str(q['id']): q['answer'] for q in questions}
+        questions = await self.llm.get_json_response(prompt, {})
         
-        details = []
-        for ans in candidate_answers:
-            q_id = str(ans['question_id'])
-            is_correct = ans['answer'] == answer_key.get(q_id)
-            if is_correct:
-                correct_count += 1
-            details.append({
-                "question_id": q_id,
-                "candidate_answer": ans['answer'],
-                "correct_answer": answer_key.get(q_id),
-                "is_correct": is_correct
-            })
+        for q in questions:
+            # 调用候选人Agent回答问题
+            answer = await candidate.answer_question(resume, q['question'], q['question_type'])
             
-        accuracy = correct_count / total if total > 0 else 0
-        passed = accuracy > 0.25
+            rounds.append({
+                "phase": "技术能力考察",
+                "question": q['question'],
+                "question_type": q['question_type'],
+                "difficulty": q['difficulty'],
+                "answer": answer,
+                "evaluation_dimension": ["技术能力", "问题解决能力"]
+            })
         
-        return {
-            "accuracy": accuracy,
-            "passed": passed,
-            "score": accuracy * 100,
-            "feedback": f"共 {total} 题，答对 {correct_count} 题，正确率 {accuracy:.2%}。评估结果: {'通过' if passed else '不通过'}",
-            "details": details
+        return rounds
+
+    async def _phase3_project(self, resume: dict, candidate: CandidateAgent) -> list:
+        """阶段三：项目经验与团队协作（2-3轮）"""
+        rounds = []
+        num_rounds = random.randint(2, 3)
+        
+        prompt = f"""
+        你是一个专业面试官，请根据以下候选人简历生成 {num_rounds} 个关于项目经验的深入问题。
+        候选人简历: {resume['简历内容']}
+        工作经验: {resume['工作经验']}
+        
+        每个问题必须包含:
+        - question: 问题内容
+        - focus: 关注点（项目细节/贡献/团队协作）
+        
+        输出格式必须为 JSON 列表。
+        """
+        
+        questions = await self.llm.get_json_response(prompt, {})
+        
+        for q in questions:
+            # 调用候选人Agent回答问题
+            answer = await candidate.answer_question(resume, q['question'], q['focus'])
+            
+            rounds.append({
+                "phase": "项目经验与团队协作",
+                "question": q['question'],
+                "focus": q['focus'],
+                "answer": answer,
+                "evaluation_dimension": ["项目经验", "团队协作"]
+            })
+        
+        return rounds
+
+    def _calculate_scores(self, interview_rounds: list) -> dict:
+        """计算各维度得分"""
+        scores = {
+            "技术能力": 0,
+            "项目经验": 0,
+            "沟通能力": 0,
+            "问题解决能力": 0,
+            "团队协作": 0
         }
+        
+        # 根据回答质量随机评分（实际应用中应该由LLM评估）
+        for round_data in interview_rounds:
+            dimensions = round_data.get("evaluation_dimension", [])
+            # 模拟评分：基于回答长度和内容质量
+            answer_length = len(round_data.get("answer", ""))
+            base_score = min(answer_length / 50, 10)  # 基础分
+            
+            for dim in dimensions:
+                if dim in scores:
+                    # 随机波动，模拟真实评估
+                    random_factor = random.uniform(0.8, 1.2)
+                    scores[dim] += base_score * random_factor
+        
+        # 归一化到各维度满分
+        max_scores = {
+            "技术能力": 30,
+            "项目经验": 25,
+            "沟通能力": 20,
+            "问题解决能力": 15,
+            "团队协作": 10
+        }
+        
+        for dim in scores:
+            scores[dim] = min(int(scores[dim]), max_scores[dim])
+        
+        return scores
+
+    async def _generate_feedback(self, scores: dict, total_score: int, passed: bool) -> str:
+        """生成面试官评语"""
+        prompt = f"""
+        你是一个专业面试官，请根据以下面试评分生成评语。
+        
+        各维度得分：
+        - 技术能力：{scores['技术能力']}/30
+        - 项目经验：{scores['项目经验']}/25
+        - 沟通能力：{scores['沟通能力']}/20
+        - 问题解决能力：{scores['问题解决能力']}/15
+        - 团队协作：{scores['团队协作']}/10
+        
+        总分：{total_score}/100
+        面试结果：{'通过' if passed else '不通过'}
+        
+        请生成一段简洁的评语（100字以内），总结候选人的表现。
+        输出格式必须为 JSON，包含：
+        - feedback: 评语内容
+        """
+        
+        response = await self.llm.get_json_response(prompt, {})
+        return response.get("feedback", "")
