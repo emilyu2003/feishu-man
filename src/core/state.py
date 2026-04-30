@@ -4,6 +4,7 @@ class RecruitmentState(TypedDict):
     # 基础配置
     jd: str
     num_candidates_to_generate: int
+    start_date: str  # 批次起始日期，格式YYYY-MM-DD
     
     # 飞书 Table IDs
     table_ids: Dict[str, str]
@@ -18,7 +19,7 @@ class RecruitmentState(TypedDict):
     current_step: str 
     logs: List[str]
     is_finished: bool
-    initialized: bool                    # 是否已经初始化过（控制是否清空表格）
+    initialized: bool  # 是否已经初始化过表格，避免每批次重复清空
     
     # 临时变量（用于节点间传递）
     target_candidate_ids: List[str]      # 当前轮次处理的候选人
