@@ -36,16 +36,33 @@ class CandidateAgent:
         
         return resume_data
 
-    async def answer_questions(self, questions: list) -> list:
-        """模拟回答选择题，随机选择 A/B/C/D"""
-        answers = []
-        for q in questions:
-            choice = random.choice(["A", "B", "C", "D"])
-            answers.append({
-                "question_id": q.get("id"),
-                "answer": choice
-            })
-        return answers
+    async def answer_question(self, resume: dict, question: str, question_type: str = "") -> str:
+        """回答面试官的问题
+        :param resume: 候选人简历信息
+        :param question: 面试官的问题
+        :param question_type: 问题类型（可选）
+        :return: 回答内容
+        """
+        prompt = f"""
+        你是求职者 {resume['姓名']}，正在参加面试。请根据你的简历信息回答面试官的问题。
+        
+        简历信息：
+        - 姓名：{resume['姓名']}
+        - 学历：{resume['学历']}
+        - 工作经验：{resume['工作经验']}
+        - 技能标签：{resume['技能标签']}
+        - 简历内容：{resume['简历内容']}
+        
+        面试官问题：{question}
+        
+        请用自然、专业的语言回答这个问题，体现你的能力和经验。
+        """
+        
+        if question_type:
+            prompt += f"\n问题类型：{question_type}"
+        
+        response = await self.llm.get_json_response(prompt, {})
+        return response.get("answer", "")
 
     async def decide_interview(self, interview_info: dict) -> int:
         """选择面试时间段 (Flow 5 step 7)

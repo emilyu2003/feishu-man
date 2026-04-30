@@ -18,6 +18,7 @@ class RecruitmentState(TypedDict):
     current_step: str 
     logs: List[str]
     is_finished: bool
+    initialized: bool                    # 是否已经初始化过（控制是否清空表格）
     
     # 临时变量（用于节点间传递）
     target_candidate_ids: List[str]      # 当前轮次处理的候选人

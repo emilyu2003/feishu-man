@@ -27,38 +27,46 @@ async def main():
     
     print(f"=== 招聘系统启动，目标录用人数: {target_accepted} ===")
     
+    # 初始状态（仅在第一次创建）
+    current_state: RecruitmentState = {
+        "jd": os.getenv("JD_CONTENT", "Python Developer"),
+        "num_candidates_to_generate": min(target_accepted - accepted_count, 3),
+        "table_ids": {},
+        "resumes": [],
+        "slots": [],
+        "interviews": [],
+        "invitations": [],
+        "current_step": "init",
+        "logs": [],
+        "is_finished": False,
+        "initialized": False,           # 首次运行时清空表格
+        "target_candidate_ids": [],
+        "pending_offer_candidates": []
+    }
+    
     while accepted_count < target_accepted:
         print(f"\n\n=== 第 {batch_num} 批招聘开始 ===")
         
-        # 初始状态
-        initial_state: RecruitmentState = {
-            "jd": os.getenv("JD_CONTENT", "Python Developer"),
-            "num_candidates_to_generate": min(target_accepted - accepted_count, 3),  # 每批最多生成3个候选人
-            "table_ids": {},
-            "resumes": [],
-            "slots": [],
-            "interviews": [],
-            "invitations": [],
-            "current_step": "init",
-            "logs": [],
-            "is_finished": False,
-            "target_candidate_ids": [],
-            "pending_offer_candidates": []
-        }
+        # 更新当前批次需要生成的候选人数量
+        current_state["num_candidates_to_generate"] = min(target_accepted - accepted_count, 3)
         
-        # 运行工作流
+        # 运行工作流（使用当前状态）
         final_state = None
-        async for event in workflow.app.astream(initial_state):
+        async for event in workflow.app.astream(current_state):
             for node_name, state_update in event.items():
                 print(f"Finished node: {node_name}")
                 final_state = state_update
-                
+        
+        # 更新状态为最终状态（跨批次保持）
+        if final_state:
+            current_state = final_state
+        
         # 统计本批次接受Offer的人数
         if final_state and "resumes" in final_state:
             batch_accepted = sum(1 for r in final_state["resumes"] if r.get("Offer状态") == "已接受")
             accepted_count += batch_accepted
             print(f"\n第 {batch_num} 批招聘结束，本批次录用: {batch_accepted} 人，累计录用: {accepted_count}/{target_accepted} 人")
-            
+        
         batch_num += 1
         
         # 检查是否达到目标
