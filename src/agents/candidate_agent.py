@@ -56,6 +56,9 @@ class CandidateAgent:
         面试官问题：{question}
         
         请用自然、专业的语言回答这个问题，体现你的能力和经验。
+        
+        请严格按照JSON格式返回结果，必须包含一个answer字段，值为你的回答内容。
+        输出示例：{"answer": "你的回答内容"}
         """
         
         if question_type:
@@ -84,6 +87,15 @@ class CandidateAgent:
         else:
             print(f"Candidate {interview_info.get('候选人ID')} 对所有时间段都不满意，需要重新安排")
             return -1
+            
+    async def answer_questions(self, questions: list) -> list:
+        """回答选择题（随机选择答案，不需要调用大模型，快速完成）"""
+        answers = []
+        options = ["A", "B", "C", "D"]
+        for q in questions:
+            # 随机选择一个答案
+            answers.append(random.choice(options))
+        return answers
 
     async def decide_offer(self, offer_info: dict) -> str:
         """决定是否接受 Offer (Flow 7 step 5)"""

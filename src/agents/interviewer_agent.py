@@ -10,8 +10,16 @@ class InterviewerAgent:
         self.llm = llm_service
         self.interviewer_id = interviewer_id
 
-    async def set_availability(self) -> list:
-        """设置未来 3 天的可用时间槽 (Flow 3)"""
+    async def set_availability(self, start_date_str: str = None) -> list:
+        """设置从指定日期开始未来7天的可用时间槽 (Flow 3)
+        start_date_str: 起始日期，格式YYYY-MM-DD，如果为None则从明天开始
+        """
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        else:
+            # 默认从明天开始
+            start_date = datetime.now() + timedelta(days=1)
+            
         slots = []
         # 每天最多上午（10:00-12:00）、下午（14:00-17:00）、晚上（19:00-21:00）
         # 简化逻辑：每个时段随机生成 1-2 个整点或半点的时间槽
@@ -21,10 +29,10 @@ class InterviewerAgent:
             ("晚上", ["19:00", "19:30", "20:00", "20:30"])
         ]
         
-        # 生成未来 7 天的可用时间槽，每天随机选择 1 个时段，符合设计文档"最长预约一周内的面试"要求
+        # 生成未来7天的可用时间槽，每天随机选择1个时段
         for day_offset in range(7):
-            current_date = (datetime.now() + timedelta(days=day_offset + 1)).strftime("%Y-%m-%d")
-            # 随机选择 1 个时段
+            current_date = (start_date + timedelta(days=day_offset)).strftime("%Y-%m-%d")
+            # 随机选择1个时段
             selected_periods = random.sample(time_configs, k=1)
             
             for period, times in selected_periods:
@@ -40,6 +48,45 @@ class InterviewerAgent:
                     })
                     
         return slots
+        
+    async def generate_questions(self, jd: str, num_questions: int = 10) -> list:
+        """基于 JD 生成选择题"""
+        prompt = """
+        你是一个专业面试官，请根据以下岗位描述 (JD) 生成 {num} 道专业选择题。
+        JD 内容: {jd}
+        
+        每道题必须包含:
+        - id: 题目编号
+        - question: 题干
+        - options: {{'A': '...', 'B': '...', 'C': '...', 'D': '...'}}
+        - answer: 正确选项 (A/B/C/D)
+        
+        输出格式必须为 JSON 列表。
+        """
+        questions = await self.llm.get_json_response(prompt, {"jd": jd, "num": num_questions})
+        return questions
+        
+    def evaluate_performance(self, questions: list, answers: list) -> dict:
+        """评估候选人答题表现"""
+        score = 0
+        total = len(questions)
+        correct_count = 0
+        
+        for q, a in zip(questions, answers):
+            if a == q["answer"]:
+                correct_count += 1
+                
+        score = int((correct_count / total) * 100)
+        # 面试通过规则：10题每题10分，至少答对3题即30分以上才算通过
+        passed = score >= 30
+        
+        return {
+            "score": score,
+            "correct_count": correct_count,
+            "total_questions": total,
+            "passed": passed,
+            "feedback": f"共 {total} 题，答对 {correct_count} 题，得分 {score}。{ '恭喜通过面试！' if passed else '很遗憾未通过面试。'}"
+        }
 
     async def conduct_interview(self, jd: str, resume: dict, candidate: CandidateAgent) -> dict:
         """进行交互式面试 (Flow 6)"""

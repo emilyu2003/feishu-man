@@ -11,6 +11,9 @@ import random
 import json
 from datetime import datetime
 
+# 面试模式配置："mcq"=随机选择题模式（低API调用，快速跑通流程），"interactive"=交互式问答模式（高API调用，真实面试）
+INTERVIEW_MODE = "mcq"
+
 class RecruitmentWorkflow:
     def __init__(self, feishu: FeishuClient, llm: LLMService):
         self.feishu = feishu
@@ -73,6 +76,8 @@ class RecruitmentWorkflow:
                 {"field_name": "筛选状态", "type": "text"},
                 {"field_name": "相似度评分", "type": "number"},
                 {"field_name": "面试状态", "type": "text"},
+                {"field_name": "面试得分", "type": "number"},
+                {"field_name": "是否通过面试", "type": "text"},
                 {"field_name": "Offer状态", "type": "text"}
             ],
             "面试官可用时间": [
@@ -100,6 +105,8 @@ class RecruitmentWorkflow:
                 {"field_name": "面试官ID", "type": "text"},
                 {"field_name": "面试时间", "type": "text"},
                 {"field_name": "面试状态", "type": "text"},
+                {"field_name": "面试得分", "type": "number"},
+                {"field_name": "是否通过面试", "type": "text"},
                 {"field_name": "面试反馈", "type": "text"},
                 {"field_name": "评估结果", "type": "text"},
                 {"field_name": "总分", "type": "number"},
@@ -117,12 +124,18 @@ class RecruitmentWorkflow:
         table_ids = {}
         for table_name, fields in schema.items():
             tid = await self.feishu.get_table_id_by_name(table_name)
+            # 首次初始化时，删除所有旧表，重新创建包含最新字段的新表
+            if tid and not state.get("initialized", False):
+                print(f"Deleting old table '{table_name}' to recreate with new fields...")
+                await self.feishu.delete_table(tid)
+                tid = None
+                
             if not tid:
-                print(f"Table '{table_name}' not found. Creating...")
+                print(f"Creating table '{table_name}'...")
                 tid = await self.feishu.create_table(table_name, fields)
             else:
                 print(f"Found existing table '{table_name}': {tid}")
-                # 只有在首次初始化时才清空表格
+                # 仅第一次初始化时清空表格，后续批次不清空
                 if not state.get("initialized", False):
                     print(f"Clearing existing data in table '{table_name}'...")
                     await self.feishu.clear_table(tid)
@@ -149,7 +162,7 @@ class RecruitmentWorkflow:
             await self.feishu.add_record(table_ids["岗位描述"], {
                 "岗位名称": "Python Developer",
                 "岗位要求": jd,
-                "招聘人数": num_candidates,
+                "招聘人数": int(num_candidates),
                 "创建时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
 
@@ -179,9 +192,11 @@ class RecruitmentWorkflow:
         print("\n" + "="*50)
         print("--- Node: Set Availability ---")
         print("="*50)
-        slots_data = await self.interviewer.set_availability()
+        # 从状态中获取批次起始日期
+        start_date = state.get("start_date")
+        slots_data = await self.interviewer.set_availability(start_date)
         
-        print(f"Interviewer setting {len(slots_data)} available slots for 7 days later...")
+        print(f"Interviewer setting {len(slots_data)} available slots starting from {start_date}...")
         # 写入飞书
         record_ids = await self.feishu.batch_add_records(state["table_ids"]["面试官可用时间"], slots_data)
         for i, rid in enumerate(record_ids):
@@ -362,7 +377,7 @@ class RecruitmentWorkflow:
         return {**state, "interviews": interviews, "invitations": updated_invitations, "current_step": "confirm_interview"}
 
     async def node_interviewing(self, state: RecruitmentState):
-        """流程 6: 面试执行（交互式问答）"""
+        """流程 6: 面试执行"""
         print("\n" + "="*50)
         print("--- Node: Interviewing ---")
         print("="*50)
@@ -372,62 +387,116 @@ class RecruitmentWorkflow:
         
         print(f"Interviewer conducting {len(confirmed_interviews)} interviews...")
         
-        updated_interviews = []
-        for inv in confirmed_interviews:
-            print(f"Conducting interactive interview for candidate {inv['候选人ID']}...")
+        if INTERVIEW_MODE == "mcq":
+            # 随机选择题模式：低API调用，快速跑通流程
+            print("Using MCQ interview mode (low API usage)...")
+            # 预先一次性生成面试题，避免重复调用大模型
+            print("Generating interview question bank...")
+            all_questions = await self.interviewer.generate_questions(jd, num_questions=10)
             
-            # 获取候选人简历
-            resume = None
-            for r in state["resumes"]:
-                if r["候选人ID"] == inv["候选人ID"]:
-                    resume = r
-                    break
-            
-            if not resume:
-                print(f"Resume not found for candidate {inv['候选人ID']}, skipping...")
-                continue
-            
-            # 进行交互式面试
-            interview_result = await self.interviewer.conduct_interview(jd, resume, self.candidate)
-            
-            # 更新面试记录
-            inv["面试反馈"] = json.dumps(interview_result["interview_rounds"], ensure_ascii=False)
-            inv["评估结果"] = json.dumps(interview_result["scores"], ensure_ascii=False)
-            inv["总分"] = interview_result["total_score"]
-            inv["最终结果"] = "通过" if interview_result["passed"] else "不通过"
-            inv["面试官评语"] = interview_result["feedback"]
-            inv["面试状态"] = "已完成"
-            
-            print(f"Interview finished. Total Score: {interview_result['total_score']}/100, Result: {inv['最终结果']}")
-            
-            # 更新面试表
-            await self.feishu.update_record(
-                state["table_ids"]["面试安排"], 
-                inv["record_id"], 
-                {
-                    "面试反馈": inv["面试反馈"], 
-                    "评估结果": inv["评估结果"],
-                    "总分": inv["总分"],
-                    "最终结果": inv["最终结果"],
-                    "面试官评语": inv["面试官评语"],
-                    "面试状态": inv["面试状态"]
-                }
-            )
-            
-            # 更新简历池中的面试状态
-            for r in state["resumes"]:
-                if r["候选人ID"] == inv["候选人ID"]:
-                    r["面试状态"] = "通过" if interview_result["passed"] else "不通过"
-                    await self.feishu.update_record(
-                        state["table_ids"]["简历池"],
-                        r["record_id"],
-                        {"面试状态": r["面试状态"]}
-                    )
-                    break
-            
-            updated_interviews.append(inv)
-            
-        return {**state, "interviews": updated_interviews, "current_step": "interviewing"}
+            for inv in confirmed_interviews:
+                print(f"Conducting MCQ interview for candidate {inv['候选人ID']}...")
+                # 1. 使用预先生成的题目
+                questions = all_questions
+                # 2. 答题
+                answers = await self.candidate.answer_questions(questions)
+                # 3. 评分
+                result = self.interviewer.evaluate_performance(questions, answers)
+                
+                inv["面试反馈"] = result["feedback"]
+                inv["评估结果"] = str(result["score"])
+                inv["面试状态"] = "已完成"
+                inv["面试得分"] = result["score"]
+                inv["是否通过面试"] = "是" if result["score"] >= 30 else "否"
+                inv["最终结果"] = inv["是否通过面试"]
+                print(f"Interview finished. Result: {inv['面试反馈']}")
+                
+                # 更新面试表
+                await self.feishu.update_record(
+                    state["table_ids"]["面试安排"], 
+                    inv["record_id"], 
+                    {
+                        "面试反馈": inv["面试反馈"], 
+                        "评估结果": inv["评估结果"], 
+                        "面试状态": inv["面试状态"],
+                        "面试得分": int(inv["评估结果"]),
+                        "是否通过面试": inv["最终结果"]
+                    }
+                )
+                
+                # 更新简历池中的面试状态
+                for resume in state["resumes"]:
+                    if resume["候选人ID"] == inv["候选人ID"]:
+                        resume["面试状态"] = "已完成"
+                        resume["面试得分"] = int(inv["评估结果"])
+                        resume["是否通过面试"] = "是" if int(inv["评估结果"]) >= 30 else "否"
+                        await self.feishu.update_record(
+                            state["table_ids"]["简历池"],
+                            resume["record_id"],
+                            {
+                                "面试状态": "已完成",
+                                "面试得分": int(inv["评估结果"]),
+                                "是否通过面试": "是" if int(inv["评估结果"]) >= 30 else "否"
+                            }
+                        )
+                        break
+                        
+        else:
+            # 交互式问答模式：高API调用，真实面试场景
+            print("Using interactive interview mode (high API usage)...")
+            for inv in confirmed_interviews:
+                print(f"Conducting interactive interview for candidate {inv['候选人ID']}...")
+                
+                # 获取候选人简历
+                resume = None
+                for r in state["resumes"]:
+                    if r["候选人ID"] == inv["候选人ID"]:
+                        resume = r
+                        break
+                
+                if not resume:
+                    print(f"Resume not found for candidate {inv['候选人ID']}, skipping...")
+                    continue
+                
+                # 进行交互式面试
+                interview_result = await self.interviewer.conduct_interview(jd, resume, self.candidate)
+                
+                # 更新面试记录
+                inv["面试反馈"] = json.dumps(interview_result["interview_rounds"], ensure_ascii=False)
+                inv["评估结果"] = json.dumps(interview_result["scores"], ensure_ascii=False)
+                inv["总分"] = interview_result["total_score"]
+                inv["最终结果"] = "通过" if interview_result["passed"] else "不通过"
+                inv["面试官评语"] = interview_result["feedback"]
+                inv["面试状态"] = "已完成"
+                
+                print(f"Interview finished. Total Score: {interview_result['total_score']}/100, Result: {inv['最终结果']}")
+                
+                # 更新面试表
+                await self.feishu.update_record(
+                    state["table_ids"]["面试安排"], 
+                    inv["record_id"], 
+                    {
+                        "面试反馈": inv["面试反馈"], 
+                        "评估结果": inv["评估结果"],
+                        "总分": inv["总分"],
+                        "最终结果": inv["最终结果"],
+                        "面试官评语": inv["面试官评语"],
+                        "面试状态": inv["面试状态"]
+                    }
+                )
+                
+                # 更新简历池中的面试状态
+                for r in state["resumes"]:
+                    if r["候选人ID"] == inv["候选人ID"]:
+                        r["面试状态"] = "通过" if interview_result["passed"] else "不通过"
+                        await self.feishu.update_record(
+                            state["table_ids"]["简历池"],
+                            r["record_id"],
+                            {"面试状态": r["面试状态"]}
+                        )
+                        break
+                
+        return {**state, "interviews": confirmed_interviews, "current_step": "interviewing"}
 
     async def node_offer_decision(self, state: RecruitmentState):
         """流程 7: 结果处理 (HR 发 Offer & 候选人回复)"""
@@ -441,12 +510,13 @@ class RecruitmentWorkflow:
             if inv["面试状态"] == "已完成":
                 print(f"Processing final decision for candidate {inv['候选人ID']}...")
                 
-                # 根据面试最终结果决定是否发 Offer
-                if inv.get("最终结果") == "通过":
-                    print(f"HR SENT Offer to candidate {inv['候选人ID']}. Waiting for candidate response...")
+                # 根据面试得分决定是否发 Offer（≥30分通过，否则不发Offer）
+                score = int(inv.get("评估结果", 0))
+                if score >= 30:
+                    print(f"HR SENT Offer to candidate {inv['候选人ID']} (score: {score}). Waiting for candidate response...")
                     final_status = await self.candidate.decide_offer(inv)
                 else:
-                    print(f"HR REJECTED candidate {inv['候选人ID']}.")
+                    print(f"HR REJECTED candidate {inv['候选人ID']} (score: {score} < 30, interview failed).")
                     final_status = OfferStatus.REJECTED.value
                 
                 # 更新简历表
