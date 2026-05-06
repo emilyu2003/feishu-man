@@ -19,7 +19,8 @@ class OfferStatus(str, Enum):
     PENDING = "待发放"
     SENT = "已发放"
     ACCEPTED = "已接受"
-    REJECTED = "已拒绝"
+    REJECTED = "已终止"  # 面试没通过被拒绝
+    DECLINED = "已拒绝"  # 面试通过后候选人拒绝了Offer
 
 class Resume(BaseModel):
     record_id: Optional[str] = None

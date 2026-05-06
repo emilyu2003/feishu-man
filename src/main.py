@@ -23,6 +23,7 @@ async def main():
     
     # 招聘目标：需要n个候选人接受Offer
     target_accepted = int(os.getenv("NUM_CANDIDATES", 3))
+    batch_size = int(os.getenv("BATCH_SIZE", 3))  # 每批招聘人数
     accepted_count = 0
     batch_num = 1
     # 记录下一批次的起始时间，确保时间不会重叠
@@ -38,7 +39,7 @@ async def main():
         # 初始状态
         initial_state: RecruitmentState = {
             "jd": os.getenv("JD_CONTENT", "Python Developer"),
-            "num_candidates_to_generate": min(target_accepted - accepted_count, 3),  # 每批最多生成3个候选人
+            "num_candidates_to_generate": min(target_accepted - accepted_count, batch_size),  # 每批最多生成batch_size个候选人
             "table_ids": {},
             "resumes": [],
             "slots": [],
