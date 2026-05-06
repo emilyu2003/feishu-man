@@ -51,7 +51,8 @@ async def main():
             "target_candidate_ids": [],
             "pending_offer_candidates": [],
             "start_date": next_batch_start_date.strftime("%Y-%m-%d"),  # 传递给工作流的起始日期
-            "initialized": initialized  # 初始化标记
+            "initialized": initialized,  # 初始化标记 - 保持批次间的状态
+            "batch_num": batch_num  # 传递批次号
         }
         
         # 运行工作流
