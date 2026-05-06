@@ -100,6 +100,6 @@ class CandidateAgent:
     async def decide_offer(self, offer_info: dict) -> str:
         """决定是否接受 Offer (Flow 7 step 5)"""
         # 模拟决策逻辑：80% 概率接受
-        decision = OfferStatus.ACCEPTED.value if random.random() < 0.8 else OfferStatus.REJECTED.value
+        decision = OfferStatus.ACCEPTED.value if random.random() < 0.8 else OfferStatus.DECLINED.value
         print(f"Candidate {offer_info.get('候选人ID')} {'接受' if decision == OfferStatus.ACCEPTED.value else '拒绝'} 了 Offer")
         return decision
