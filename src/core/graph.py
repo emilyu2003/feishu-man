@@ -9,7 +9,7 @@ from ..schema.models import OfferStatus
 import os
 import random
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 面试模式配置："mcq"=随机选择题模式（低API调用，快速跑通流程），"interactive"=交互式问答模式（高API调用，真实面试）
 INTERVIEW_MODE = "mcq"
@@ -163,7 +163,7 @@ class RecruitmentWorkflow:
                 "岗位名称": "Python Developer",
                 "岗位要求": jd,
                 "招聘人数": int(num_candidates),
-                "创建时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "创建时间": state.get("start_date", datetime.now().strftime("%Y-%m-%d")) + " 08:00:00"
             })
 
         return {**state, "table_ids": table_ids, "jd": jd, "num_candidates_to_generate": num_candidates, "current_step": "initialize", "initialized": True}
@@ -243,50 +243,88 @@ class RecruitmentWorkflow:
         # 复制slot列表用于跟踪状态变化
         updated_slots = [s.copy() for s in state["slots"]]
         
-        for cand in candidates:
-            # 只选择"可用"状态的时间槽
+        # 需要分配的候选人和已分配的候选人
+        candidates_to_assign = candidates.copy()
+        assigned_candidates = []
+        
+        # 循环分配：直到所有候选人都分配到时间或者没有更多可用时间槽
+        iteration = 1
+        max_iterations = 10  # 最大循环次数，防止无限循环
+        
+        while candidates_to_assign and iteration <= max_iterations:
+            print(f"\n--- Scheduling iteration {iteration} ---")
+            print(f"Candidates remaining to assign: {len(candidates_to_assign)}")
+            
+            # 获取当前可用的时间槽
             available_slots = [s for s in updated_slots if s["可用状态"] == "可用"]
+            print(f"Available slots: {len(available_slots)}")
+            
             if not available_slots:
-                print(f"No available slots for candidate {cand['姓名']}, skipping...")
-                continue
+                print("No available slots left in this iteration.")
+                break
                 
-            # 为每个候选人随机选择最多3个可用时间段
-            shuffled_slots = random.sample(available_slots, len(available_slots))
-            selected_slots = shuffled_slots[:min(3, len(shuffled_slots))]
+            # 本轮需要处理的候选人（按顺序处理）
+            current_round_candidates = candidates_to_assign.copy()
+            candidates_to_assign = []
             
-            # 将选中的时间槽标记为"已发送"
-            for slot in selected_slots:
-                # 更新内存中的状态
-                for s in updated_slots:
-                    if s["record_id"] == slot["record_id"]:
-                        s["可用状态"] = "已发送"
-                        break
-                # 更新飞书表格中的状态
-                await self.feishu.update_record(
-                    state["table_ids"]["面试官可用时间"],
-                    slot["record_id"],
-                    {"可用状态": "已发送"}
-                )
+            for cand in current_round_candidates:
+                # 获取当前可用的时间槽（每次循环都重新获取）
+                available_slots = [s for s in updated_slots if s["可用状态"] == "可用"]
                 
-            # 创建邀约记录
-            invitation_id = f"INV_{cand['候选人ID']}"
-            invitation_fields = {
-                "邀约ID": invitation_id,
-                "候选人ID": cand["候选人ID"],
-                "候选人姓名": cand["姓名"],
-                "可选时间段1": f"{selected_slots[0]['日期']} {selected_slots[0]['具体时间']}",
-                "可选时间段2": f"{selected_slots[1]['日期']} {selected_slots[1]['具体时间']}" if len(selected_slots) >=2 else "",
-                "可选时间段3": f"{selected_slots[2]['日期']} {selected_slots[2]['具体时间']}" if len(selected_slots) >=3 else "",
-                "邀约状态": "待回复",
-                "邀约时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
+                if not available_slots:
+                    # 没有可用时间槽了，放到下一轮
+                    candidates_to_assign.append(cand)
+                    print(f"No available slots for candidate {cand['姓名']}, will retry in next round...")
+                    continue
+                    
+                # 为候选人随机选择最多3个可用时间段
+                shuffled_slots = random.sample(available_slots, len(available_slots))
+                selected_slots = shuffled_slots[:min(3, len(shuffled_slots))]
+                
+                # 将选中的时间槽标记为"已发送"
+                for slot in selected_slots:
+                    # 更新内存中的状态
+                    for s in updated_slots:
+                        if s["record_id"] == slot["record_id"]:
+                            s["可用状态"] = "已发送"
+                            break
+                    # 更新飞书表格中的状态
+                    await self.feishu.update_record(
+                        state["table_ids"]["面试官可用时间"],
+                        slot["record_id"],
+                        {"可用状态": "已发送"}
+                    )
+                    
+                # 创建邀约记录
+                invitation_id = f"INV_{cand['候选人ID']}"
+                invitation_fields = {
+                    "邀约ID": invitation_id,
+                    "候选人ID": cand["候选人ID"],
+                    "候选人姓名": cand["姓名"],
+                    "可选时间段1": f"{selected_slots[0]['日期']} {selected_slots[0]['具体时间']}",
+                    "可选时间段2": f"{selected_slots[1]['日期']} {selected_slots[1]['具体时间']}" if len(selected_slots) >=2 else "",
+                    "可选时间段3": f"{selected_slots[2]['日期']} {selected_slots[2]['具体时间']}" if len(selected_slots) >=3 else "",
+                    "邀约状态": "待回复",
+                    "邀约时间": state.get("start_date", datetime.now().strftime("%Y-%m-%d")) + " 09:00:00"
+                }
+                
+                record_id = await self.feishu.add_record(state["table_ids"]["面试邀约记录"], invitation_fields)
+                invitation_fields["record_id"] = record_id
+                invitation_fields["available_slots"] = selected_slots
+                invitations.append(invitation_fields)
+                assigned_candidates.append(cand)
+                
+                print(f"Sent invitation to '{cand['姓名']}' with {len(selected_slots)} time slots.")
             
-            record_id = await self.feishu.add_record(state["table_ids"]["面试邀约记录"], invitation_fields)
-            invitation_fields["record_id"] = record_id
-            invitation_fields["available_slots"] = selected_slots
-            invitations.append(invitation_fields)
+            iteration += 1
             
-            print(f"Sent invitation to '{cand['姓名']}' with {len(selected_slots)} time slots.")
+        # 检查是否有候选人没有分配到时间
+        if candidates_to_assign:
+            print(f"\nWARNING: {len(candidates_to_assign)} candidates could not be assigned interview slots:")
+            for cand in candidates_to_assign:
+                print(f"  - {cand['姓名']} (ID: {cand['候选人ID']})")
+                
+        print(f"\nTotal invitations sent: {len(invitations)}")
                 
         return {**state, "invitations": invitations, "slots": updated_slots, "current_step": "scheduling"}
 
@@ -302,7 +340,7 @@ class RecruitmentWorkflow:
         for inv in invitations:
             # 候选人选择时间段
             selected_idx = await self.candidate.decide_interview(inv)
-            inv["回复时间"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            inv["回复时间"] = state.get("start_date", datetime.now().strftime("%Y-%m-%d")) + " 10:00:00"
             
             if selected_idx >= 0:
                 # 候选人选择了时间段
@@ -370,6 +408,20 @@ class RecruitmentWorkflow:
                         slot["record_id"],
                         {"可用状态": "可用"}
                     )
+                
+                # 更新简历池中该候选人的状态为"已拒绝"
+                for resume in state["resumes"]:
+                    if resume["候选人ID"] == inv["候选人ID"]:
+                        resume["面试状态"] = "已拒绝"
+                        resume["Offer状态"] = "已终止"
+                        await self.feishu.update_record(
+                            state["table_ids"]["简历池"],
+                            resume["record_id"],
+                            {"面试状态": "已拒绝", "Offer状态": "已终止"}
+                        )
+                        print(f"Updated resume pool: '{inv['候选人姓名']}' marked as 'Interview Rejected' and 'Offer Terminated'.")
+                        break
+                
                 print(f"Candidate '{inv['候选人姓名']}' rejected all time slots. Slots returned to available.")
                 
             updated_invitations.append(inv)
@@ -382,10 +434,22 @@ class RecruitmentWorkflow:
         print("--- Node: Interviewing ---")
         print("="*50)
         jd = state["jd"]
-        # 仅处理已确认的面试
-        confirmed_interviews = [inv for inv in state["interviews"] if inv["安排状态"] == "已确认"]
+        # 仅处理已确认且状态为待进行的面试
+        confirmed_interviews = [inv for inv in state["interviews"] if inv["安排状态"] == "已确认" and inv["面试状态"] == "待进行"]
         
-        print(f"Interviewer conducting {len(confirmed_interviews)} interviews...")
+        # 按照面试时间排序，确保先进行时间早的面试
+        def get_interview_time(inv):
+            from datetime import datetime
+            try:
+                return datetime.strptime(inv["面试时间"], "%Y-%m-%d %H:%M")
+            except:
+                return datetime.max
+        
+        confirmed_interviews.sort(key=get_interview_time)
+        
+        print(f"Interviewer conducting {len(confirmed_interviews)} interviews (sorted by time)...")
+        for inv in confirmed_interviews:
+            print(f"  - {inv['面试时间']}: {inv['候选人ID']} ({inv['面试状态']})")
         
         if INTERVIEW_MODE == "mcq":
             # 随机选择题模式：低API调用，快速跑通流程
@@ -495,8 +559,26 @@ class RecruitmentWorkflow:
                             {"面试状态": r["面试状态"]}
                         )
                         break
-                
-        return {**state, "interviews": confirmed_interviews, "current_step": "interviewing"}
+        
+        # 计算批次结束时间：取最后一场面试的时间
+        batch_end_time = datetime.now()
+        if confirmed_interviews:
+            latest_interview_time = None
+            for inv in confirmed_interviews:
+                if "面试时间" in inv.keys():
+                    try:
+                        inv_time = datetime.strptime(inv["面试时间"], "%Y-%m-%d %H:%M")
+                        print(">>>>>>>>>>>>>>>>>>>>>>>inv_time: " + inv_time)
+                        if latest_interview_time is None or inv_time > latest_interview_time:
+                            latest_interview_time = inv_time
+                    except:
+                        pass
+            if latest_interview_time:
+                # 面试结束后加1小时作为批次结束时间
+                batch_end_time = latest_interview_time + timedelta(hours=1)
+            print(">>>>>>>>>>>>>>>>>>>>>>>latest_interview_time: " + latest_interview_time)
+
+        return {**state, "interviews": confirmed_interviews, "current_step": "interviewing", "batch_end_time": batch_end_time}
 
     async def node_offer_decision(self, state: RecruitmentState):
         """流程 7: 结果处理 (HR 发 Offer & 候选人回复)"""
@@ -530,7 +612,7 @@ class RecruitmentWorkflow:
                         )
                         print(f"Final status for {r['姓名']}: {final_status}")
                         
-        return {**state, "resumes": resumes, "current_step": "offer_decision"}
+        return {**state, "resumes": resumes, "current_step": "offer_decision", "batch_end_time": state.get("batch_end_time")}
 
     async def node_reporting(self, state: RecruitmentState):
         """流程 8: 数据分析"""
@@ -539,12 +621,15 @@ class RecruitmentWorkflow:
         print("\n=== Final Recruitment Report ===\n")
         print(report)
         
+        # 使用批次结束时间而不是系统当前时间，确保时间逻辑正确
+        batch_end_time = state.get("batch_end_time", datetime.now())
+        report_time = batch_end_time.strftime("%Y-%m-%d %H:%M:%S")
+        
         # 写入飞书
-        from datetime import datetime
         await self.feishu.add_record(state["table_ids"]["招聘数据分析"], {
             "报告类型": "招聘全流程分析报告",
             "报告内容": report,
-            "生成时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "生成时间": report_time
         })
         
         return {**state, "current_step": "finished", "is_finished": True}
