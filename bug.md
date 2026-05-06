@@ -1,9 +1,13 @@
 ## 已修复的问题
 
 ### 1. 招聘数据分析生成时间错误
-- **问题**：招聘数据分析表格中的生成时间与批次开始时间相同，不符合现实逻辑
-- **原因**：`batch_end_time` 在 `node_interviewing` 中计算后，在 `node_offer_decision` 中没有传递到下一节点
-- **修复**：在 `node_offer_decision` 的返回语句中添加 `batch_end_time`，确保在 `node_reporting` 中可以获取到正确的批次结束时间
+- **问题**：招聘数据分析表格中的生成时间与批次开始时间相同，不符合现实逻辑；`batch_end_time` 在传递过程中丢失
+- **原因**：
+  1. `RecruitmentState` 类型定义中缺少 `batch_end_time` 字段
+  2. `node_offer_decision` 节点返回状态时没有包含 `batch_end_time`
+- **修复**：
+  1. 在 `src/core/state.py` 中添加 `batch_end_time: Optional[datetime]` 字段
+  2. 在 `node_offer_decision` 返回语句中添加 `"batch_end_time": state.get("batch_end_time")`
 - **现在逻辑**：报告生成时间 = 本批次最后一场面试时间 + 1小时
 
 ### 2. 表格被清空问题
