@@ -1,4 +1,5 @@
 from typing import TypedDict, List, Dict, Any, Optional
+from datetime import datetime
 
 class RecruitmentState(TypedDict):
     # 基础配置
@@ -24,3 +25,4 @@ class RecruitmentState(TypedDict):
     # 临时变量（用于节点间传递）
     target_candidate_ids: List[str]      # 当前轮次处理的候选人
     pending_offer_candidates: List[str]  # 待决定 Offer 的候选人
+    batch_end_time: Optional[datetime]   # 批次结束时间，用于报告生成

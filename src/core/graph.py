@@ -568,7 +568,6 @@ class RecruitmentWorkflow:
                 if "面试时间" in inv.keys():
                     try:
                         inv_time = datetime.strptime(inv["面试时间"], "%Y-%m-%d %H:%M")
-                        print(">>>>>>>>>>>>>>>>>>>>>>>inv_time: " + inv_time)
                         if latest_interview_time is None or inv_time > latest_interview_time:
                             latest_interview_time = inv_time
                     except:
@@ -576,8 +575,6 @@ class RecruitmentWorkflow:
             if latest_interview_time:
                 # 面试结束后加1小时作为批次结束时间
                 batch_end_time = latest_interview_time + timedelta(hours=1)
-            print(">>>>>>>>>>>>>>>>>>>>>>>latest_interview_time: " + latest_interview_time)
-
         return {**state, "interviews": confirmed_interviews, "current_step": "interviewing", "batch_end_time": batch_end_time}
 
     async def node_offer_decision(self, state: RecruitmentState):
@@ -611,7 +608,7 @@ class RecruitmentWorkflow:
                             {"Offer状态": r["Offer状态"]}
                         )
                         print(f"Final status for {r['姓名']}: {final_status}")
-                        
+ 
         return {**state, "resumes": resumes, "current_step": "offer_decision", "batch_end_time": state.get("batch_end_time")}
 
     async def node_reporting(self, state: RecruitmentState):
