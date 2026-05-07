@@ -1,3 +1,13 @@
+# 先忽略所有文件
+/*
+
+# 例外：需要追踪的核心目录和文件
+!/src/
+!/tests/
+!/README.md
+!/requirements.txt
+!.gitignore
+
 # 涉密配置文件
 .env
 .lark-cli/
@@ -34,3 +44,5 @@ logs/
 # 临时数据
 *.tmp
 *.temp
+*.md
+!README.md
